@@ -1,4 +1,4 @@
-# simple-proxy
+# simple_proxy
 most of the code taken from https://github.com/p-stream/simple-proxy/
 ## features
 - deployable on many platforms - thanks to nitro
