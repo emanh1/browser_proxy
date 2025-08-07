@@ -1,7 +1,9 @@
 # browser_proxy
 ## features
-- get dynamically loaded dom with puppeteer
 - bypass CORS
+- get dynamically loaded dom with puppeteer
+- use puppeteer-cluster to handle multiple requests
+- customizable waitUntil and timeout via http headers
 - deployable on many platforms - thanks to nitro
 - whitelisting domains
 - secure the proxy with turnstile
