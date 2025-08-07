@@ -3,6 +3,7 @@
 - bypass CORS
 - get dynamically loaded dom with puppeteer
 - use puppeteer-cluster to handle multiple requests
+- caching with redis
 - customizable waitUntil and timeout via http headers
 - deployable on many platforms - thanks to nitro
 - whitelisting domains
