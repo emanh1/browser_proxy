@@ -1,5 +1,5 @@
 {
-  "name": "simple_proxy",
+  "name": "browser_proxy",
   "version": "1.0.1",
   "private": true,
   "scripts": {
@@ -14,6 +14,7 @@
   "dependencies": {
     "ioredis": "^5.7.0",
     "jose": "^6.0.11",
-    "puppeteer": "^24.10.1"
+    "puppeteer": "^24.10.1",
+    "puppeteer-cluster": "^0.24.0"
   }
 }
