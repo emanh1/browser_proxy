@@ -1,3 +1,5 @@
+import { getAllowedDomains } from "~/utils/whitelist";
+
 function isInternalHost(host: string) {
   return (
     host === 'localhost' ||

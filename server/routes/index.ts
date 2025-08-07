@@ -1,16 +1,20 @@
-import { getBodyBuffer } from '@/utils/body';
-import {
-  getProxyHeaders,
-  getAfterResponseHeaders,
-  getBlacklistedHeaders,
-} from '@/utils/headers';
 import {
   createTokenIfNeeded,
   isAllowedToMakeRequest,
   setTokenHeader,
 } from '@/utils/turnstile';
-import { specificProxyRequest } from '~/utils/proxy';
 import { sendJson } from '~/utils/sending';
+import puppeteer from 'puppeteer';
+
+let browser = null;
+
+async function getBrowser() {
+  if (!browser) {
+    browser = await puppeteer.launch({ headless: true });
+    console.log('Puppeteer initialized');
+  }
+  return browser;
+}
 
 export default defineEventHandler(async (event) => {
   // Handle preflight CORS requests
@@ -33,16 +37,16 @@ export default defineEventHandler(async (event) => {
   // Parse destination URL
   const destination = getQuery<{ destination?: string }>(event).destination;
   if (!destination) {
-    return await sendJson({
-      event,
-      status: 200,
-      data: {
-        message: `Proxy is working as expected (v${useRuntimeConfig(event).version
-          })`,
-      },
-    });
+    return sendError(event, createError({
+      statusCode: 400,
+      statusMessage: 'Destination required'
+    }))
   }
-
+  if (process.env.REQ_DEBUG === 'true') console.log({
+    type: 'browser_request',
+    url: destination,
+    headers: getHeaders(event)
+  });
   // Check if allowed to make the request
   if (!(await isAllowedToMakeRequest(event))) {
     return await sendJson({
@@ -54,27 +58,47 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  // Read body and create token if needed
-  const body = await getBodyBuffer(event);
-  const token = await createTokenIfNeeded(event);
-
-  // Proxy the request
+  let page = null;
   try {
-    await specificProxyRequest(event, destination, {
-      blacklistedHeaders: getBlacklistedHeaders(),
-      fetchOptions: {
-        redirect: 'follow',
-        headers: getProxyHeaders(event.headers),
-        body,
-      },
-      onResponse(outputEvent, response) {
-        const headers = getAfterResponseHeaders(response.headers, response.url);
-        setResponseHeaders(outputEvent, headers);
-        if (token) setTokenHeader(event, token);
-      },
+    const then = Date.now();
+    const browser = await getBrowser();
+    page = await browser.newPage();
+    const token = await createTokenIfNeeded(event);
+    const allowedWaitUntil = ['networkidle2', 'domcontentloaded'];
+
+    const waitUntil = getHeader(event, 'x-browser-wait-until') ?? 'networkidle2';
+
+    if (!allowedWaitUntil.includes(waitUntil)) {
+      return await sendJson({
+        event,
+        status: 400,
+        data: {
+          error: `Invalid waitUntil, only ${allowedWaitUntil.join(', ')}`
+        }
+      })
+    }
+
+    const timeoutStr = getHeader(event, 'x-browser-timeout');
+    const timeout = timeoutStr && /^\d+$/.test(timeoutStr) ? parseInt(timeoutStr) : 30000;
+
+    await page.goto(destination, {
+      waitUntil: waitUntil as 'networkidle2' | 'domcontentloaded',
+      timeout
     });
-  } catch (e) {
-    console.log('Error fetching', e);
-    throw e;
+
+    const content = await page.content();
+
+    await page.close();
+    if (process.env.REQ_DEBUG) console.log("[Browser] Took", Date.now() - then, 'ms');
+    event.node.res.setHeader('Access-Control-Allow-Origin', '*');
+    event.node.res.setHeader('X-Proxy-Mode', 'browser');
+    if (token) setTokenHeader(event, token);
+    return await send(event, content, 'text/html');
+  } catch (error) {
+    if (page) await page.close();
+    console.log(error);
+    event.node.res.statusCode = 504;
+    return sendJson({ event, status: 504, data: { error: 'Puppeteer failed or timed out' } })
   }
+
 });
