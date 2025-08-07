@@ -22,7 +22,7 @@ export async function getBrowserCluster(): Promise<Cluster> {
       ],
     },
     timeout: 60 * 1000,
-    monitor: true,
+    monitor: process.env.REQ_DEBUG === 'true' ? true : false,
   });
 
   return cluster;
