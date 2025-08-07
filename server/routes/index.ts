@@ -84,10 +84,15 @@ export default defineEventHandler(async (event) => {
       timeout
     }, async ({ page, data }) => {
       const { url, waitUntil, timeout } = data;
-      await page.goto(url, {
+      const response = await page.goto(url, {
         waitUntil: waitUntil as 'networkidle2' | 'domcontentloaded',
         timeout,
       });
+
+      if (!response || response.status() != 200) {
+        throw new Error(`${destination} ${response?.status()}`)
+      }
+
       return await page.content();
     });
 
