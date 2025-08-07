@@ -5,6 +5,7 @@ import {
   setTokenHeader,
 } from '@/utils/turnstile';
 import { sendJson } from '~/utils/sending';
+import redis, { getCacheKey } from '~/utils/redis';
 
 export default defineEventHandler(async (event) => {
   // Handle preflight CORS requests
@@ -42,11 +43,27 @@ export default defineEventHandler(async (event) => {
       return sendJson({ event, status: 503, data: { error: 'Browser cluster not ready' } });
     }
   }
-  if (process.env.REQ_DEBUG === 'true') console.log({
-    type: 'browser_request',
-    url: destination,
-    headers: getHeaders(event)
-  });
+
+  const waitUntil = getHeader(event, 'x-browser-wait-until') ?? 'networkidle2';
+  const timeoutStr = getHeader(event, 'x-browser-timeout') ?? '30000';
+  const timeout = timeoutStr && /^\d+$/.test(timeoutStr) ? parseInt(timeoutStr) : 30000;
+
+  const cacheKey = getCacheKey(encodeURIComponent(destination), waitUntil, timeoutStr);
+
+  try {
+    const cachedHtml = await redis.get(cacheKey);
+    if (cachedHtml) {
+      if (process.env.REQ_DEBUG === 'true') console.log(`Cache hit for ${destination} ${cacheKey}`);
+      event.node.res.setHeader('Access-Control-Allow-Origin', '*');
+      event.node.res.setHeader('X-Proxy-Mode', 'browser-cache');
+      event.node.res.setHeader('X-Cache-Status', 'HIT');
+
+      return await send(event, cachedHtml, 'text/html');
+    }
+  } catch (err) {
+    console.log('[Redis] Get error', err);
+  }
+
   // Check if allowed to make the request
   if (!(await isAllowedToMakeRequest(event))) {
     return await sendJson({
@@ -61,26 +78,35 @@ export default defineEventHandler(async (event) => {
   try {
     const cluster = await getBrowserCluster();
 
-    const waitUntil = getHeader(event, 'x-browser-wait-until') ?? 'networkidle2';
-    const timeoutStr = getHeader(event, 'x-browser-timeout');
-    const timeout = timeoutStr && /^\d+$/.test(timeoutStr) ? parseInt(timeoutStr) : 30000;
-
     const html = await cluster.execute({
       url: destination,
       waitUntil,
       timeout
     }, async ({ page, data }) => {
       const { url, waitUntil, timeout } = data;
-      await page.goto(url, {
+      const response = await page.goto(url, {
         waitUntil: waitUntil as 'networkidle2' | 'domcontentloaded',
         timeout,
       });
+
+      if (!response || response.status() != 200) {
+        throw new Error(`${destination} ${response?.status()}`)
+      }
+
       return await page.content();
     });
+
+    try {
+      await redis.set(cacheKey, html, 'EX', process.env.REDIS_TTL ? Number(process.env.REDIS_TTL) : 300);
+    } catch (error) {
+      console.log('[Redis] Set error', error);
+    }
 
     const token = await createTokenIfNeeded(event);
     event.node.res.setHeader('Access-Control-Allow-Origin', '*');
     event.node.res.setHeader('X-Proxy-Mode', 'browser');
+    event.node.res.setHeader('X-Cache-Status', 'MISS');
+
     if (token) setTokenHeader(event, token);
 
     return await send(event, html, 'text/html');
